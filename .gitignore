@@ -46,3 +46,9 @@ yarn-error.log*
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# local run logs
+*.log
+
+# windows/bash crash artifacts
+*.stackdump
