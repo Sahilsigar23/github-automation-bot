@@ -1,0 +1,40 @@
+# Local PostgreSQL for development. Neon is recommended for deployment, but this
+# lets you run everything offline.
+#
+#   docker compose up -d
+#   # then in .env:
+#   DATABASE_URL="postgresql://postgres:postgres@localhost:5432/github_bot?schema=public"
+#   DIRECT_URL="postgresql://postgres:postgres@localhost:5432/github_bot?schema=public"
+#   pnpm prisma migrate deploy && pnpm db:seed
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: gab-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: github_bot
+    ports:
+      - "5432:5432"
+    volumes:
+      - gab-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Optional lightweight DB UI at http://localhost:8080
+  adminer:
+    image: adminer:latest
+    container_name: gab-adminer
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    depends_on:
+      - db
+
+volumes:
+  gab-pgdata:

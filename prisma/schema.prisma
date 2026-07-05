@@ -1,0 +1,312 @@
+// ---------------------------------------------------------------------------
+// github-automation-bot — Prisma schema
+//
+// PostgreSQL (Neon). Run `pnpm prisma migrate deploy` in production or
+// `pnpm prisma migrate dev` locally. See README "Database migrations".
+// ---------------------------------------------------------------------------
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  // Direct (non-pooled) URL for migrations; falls back to DATABASE_URL.
+  directUrl = env("DIRECT_URL")
+}
+
+// ============================ Enums ========================================
+
+/// GitHub webhook event types this app understands.
+enum EventType {
+  issues
+  pull_request
+  push
+}
+
+/// Which part of the event a rule keyword is matched against.
+enum MatchField {
+  title
+  body
+  any
+}
+
+/// Write-back action a rule can perform on GitHub.
+enum RuleActionType {
+  ADD_LABEL
+  ADD_COMMENT
+  NONE
+}
+
+/// Lifecycle of a received webhook event.
+enum ProcessingStatus {
+  RECEIVED
+  PROCESSING
+  PROCESSED
+  FAILED
+  SKIPPED
+  DUPLICATE
+}
+
+/// Generic status for actions, deliveries and log entries.
+enum ActionStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  SKIPPED
+}
+
+/// AI-suggested priority for an issue/PR.
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+// ============================ Auth models ==================================
+// User / Account / Session / VerificationToken follow the Auth.js (NextAuth)
+// Prisma adapter contract, extended with GitHub + app-specific fields.
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+
+  // GitHub identity
+  githubId    String? @unique
+  githubLogin String?
+
+  // Secrets encrypted at rest (AES-256-GCM). Never sent to the client.
+  encryptedAccessToken   String? @db.Text
+  encryptedSlackWebhook  String? @db.Text
+
+  // Preferences
+  aiEnabled    Boolean @default(true)
+  slackEnabled Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  accounts     Account[]
+  sessions     Session[]
+  repositories Repository[]
+  rules        Rule[]
+
+  @@map("users")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+// ============================ Domain models ================================
+
+model Repository {
+  id       String  @id @default(cuid())
+  userId   String
+  githubId BigInt  @unique // repository id from GitHub
+  name     String // short name, e.g. "hello-world"
+  fullName String  @unique // "owner/hello-world"
+  owner    String
+  private  Boolean @default(false)
+  htmlUrl  String
+
+  // Auto-registered webhook (best-effort). Null when added manually.
+  webhookId        BigInt?
+  webhookActive    Boolean @default(false)
+  defaultBranch    String  @default("main")
+
+  connectedAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user   User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rules  Rule[]
+  events WebhookEvent[]
+
+  @@index([userId])
+  @@map("repositories")
+}
+
+model Rule {
+  id           String         @id @default(cuid())
+  userId       String
+  repositoryId String
+  name         String
+  eventType    EventType
+  keyword      String? // substring match; null/empty = match all
+  matchField   MatchField     @default(title)
+  action       RuleActionType @default(ADD_LABEL)
+  actionValue  String? // label name to add, or comment body template
+  slackEnabled Boolean        @default(true)
+  enabled      Boolean        @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  repository Repository  @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  actionLogs ActionLog[]
+
+  @@index([repositoryId])
+  @@index([userId])
+  @@map("rules")
+}
+
+model WebhookEvent {
+  id           String           @id @default(cuid())
+  deliveryId   String           @unique // X-GitHub-Delivery — duplicate protection
+  eventType    String // raw event name from X-GitHub-Event
+  action       String? // payload.action (opened, closed, ...)
+  repositoryId String?
+  repoFullName String
+  senderLogin  String?
+  title        String?
+  number       Int? // issue / PR number
+  htmlUrl      String?
+  payload      Json
+  status       ProcessingStatus @default(RECEIVED)
+  processingMs Int? // total processing latency
+  error        String?          @db.Text
+
+  receivedAt  DateTime  @default(now())
+  processedAt DateTime?
+
+  repository      Repository?     @relation(fields: [repositoryId], references: [id], onDelete: SetNull)
+  actionLogs      ActionLog[]
+  slackDeliveries SlackDelivery[]
+  githubActions   GitHubAction[]
+  aiAnalysis      AIAnalysis?
+
+  @@index([repositoryId])
+  @@index([eventType])
+  @@index([status])
+  @@index([receivedAt])
+  @@map("webhook_events")
+}
+
+model ActionLog {
+  id             String       @id @default(cuid())
+  webhookEventId String
+  ruleId         String?
+  step           String // MATCH | ADD_LABEL | CREATE_LABEL | ADD_COMMENT | SLACK | AI | SKIP
+  status         ActionStatus
+  message        String?      @db.Text
+  errorMessage   String?      @db.Text
+  retryCount     Int          @default(0)
+  latencyMs      Int?
+
+  createdAt DateTime @default(now())
+
+  webhookEvent WebhookEvent @relation(fields: [webhookEventId], references: [id], onDelete: Cascade)
+  rule         Rule?        @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+
+  @@index([webhookEventId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("action_logs")
+}
+
+model GitHubAction {
+  id             String       @id @default(cuid())
+  webhookEventId String
+  actionType     String // ADD_LABEL | CREATE_LABEL | ADD_COMMENT
+  target         String? // e.g. "issue #12" or label name
+  status         ActionStatus @default(PENDING)
+  retryCount     Int          @default(0)
+  maxRetries     Int          @default(3)
+  errorMessage   String?      @db.Text
+  latencyMs      Int?
+  responseUrl    String? // link to created comment / labeled issue
+  payload        Json? // resolved params for retry: { owner, repo, issueNumber, labels|body }
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  webhookEvent WebhookEvent @relation(fields: [webhookEventId], references: [id], onDelete: Cascade)
+
+  @@index([webhookEventId])
+  @@index([status])
+  @@map("github_actions")
+}
+
+model SlackDelivery {
+  id             String       @id @default(cuid())
+  webhookEventId String
+  messageText    String       @db.Text
+  status         ActionStatus @default(PENDING)
+  statusCode     Int?
+  retryCount     Int          @default(0)
+  maxRetries     Int          @default(3)
+  errorMessage   String?      @db.Text
+  latencyMs      Int?
+  payload        Json? // full { text, blocks } body for faithful retry
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  webhookEvent WebhookEvent @relation(fields: [webhookEventId], references: [id], onDelete: Cascade)
+
+  @@index([webhookEventId])
+  @@index([status])
+  @@map("slack_deliveries")
+}
+
+model AIAnalysis {
+  id             String   @id @default(cuid())
+  webhookEventId String   @unique
+  summary        String   @db.Text
+  priority       Priority @default(MEDIUM)
+  suggestedLabel String?
+  raw            Json?
+  model          String   @default("gemini-2.0-flash")
+  latencyMs      Int?
+  cached         Boolean  @default(false)
+
+  createdAt DateTime @default(now())
+
+  webhookEvent WebhookEvent @relation(fields: [webhookEventId], references: [id], onDelete: Cascade)
+
+  @@map("ai_analyses")
+}
