@@ -45,3 +45,4 @@ export async function GET(req: Request): Promise<Response> {
 
   return json({ events, total, limit, offset });
 }
+/* routing the events ids */
