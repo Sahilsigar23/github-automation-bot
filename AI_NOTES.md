@@ -82,4 +82,4 @@ so `/api/repositories` threw at runtime only. Fixed with a BigInt-aware
   duplicate handling idempotent without a check-then-act race."
 - "Build a shadcn/ui rule-builder dialog: event type, match field, keyword,
   action (label/comment/none) with conditional fields, and Slack + enabled
-  switches."
+  switches. "
