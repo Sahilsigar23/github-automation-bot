@@ -16,6 +16,7 @@ export default function GlobalError({
     console.error(error);
   }, [error]);
 // printing error for debugging
+  // for testing
   return (
     <div className="flex min-h-screen flex-col items-center justify-center gap-6 p-6 text-center">
       <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-destructive/10">
