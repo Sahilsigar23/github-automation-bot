@@ -15,7 +15,7 @@ export default function GlobalError({
     // Surface to the console; a real deployment would forward to a log drain.
     console.error(error);
   }, [error]);
-
+// printing error for debugging
   return (
     <div className="flex min-h-screen flex-col items-center justify-center gap-6 p-6 text-center">
       <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-destructive/10">
